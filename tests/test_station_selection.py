@@ -98,6 +98,83 @@ class Test_FindSensorsByToleranceStationSelection(unittest.TestCase):
 
         assert result is None
 
+    def test_keep_failed_outside_tolerance(self):
+        """
+        With keep_failed, a station that fails the depth selection is
+        returned as a placeholder on its lowest sensor id instead of None.
+        """
+        primary, meta = self.ds.find_sensors_by_tolerance_station_selection(
+            self.sensor_ids,
+            depth_top=0.5,
+            depth_bottom=1.0,
+            top_tol=0.0,
+            bottom_tol=0.0,
+            reshape_meta=reshape_meta,
+            keep_failed=True,
+        )
+
+        assert primary == 0
+        assert meta["other_ids"] == []
+        assert meta["station"] == "Karolinenfeld"
+        assert meta["instrument"] == "Tolerance selection failed"
+        assert meta["frm_class"] == "Tolerance selection failed"
+        assert meta["frm_snr"] is None
+        assert meta["selection_failed"] is True
+        assert meta["selection_reason"] == "depth"
+        assert meta["instrument_depthfrom"] == 0.05
+        assert meta["instrument_depthto"] == 0.05
+
+    def test_keep_failed_no_overlap(self):
+        """
+        Sensors that pass the depth selection but never measure at the same
+        time are discarded, or with keep_failed returned as a placeholder.
+        """
+        read_metadata = self.ds.read_metadata
+
+        def read_metadata_shifted(idx, format="pandas"):
+            # move sensor 2 to a period after the other two sensors
+            meta = read_metadata(idx, format=format)
+            if idx == 2:
+                meta["timerange_from"] = [(pd.Timestamp("2009-01-01"),
+                                           None, None)]
+                meta["timerange_to"] = [(pd.Timestamp("2009-12-31"),
+                                         None, None)]
+            return meta
+
+        self.ds.read_metadata = read_metadata_shifted
+        kwargs = dict(depth_top=0.0, depth_bottom=0.05, top_tol=0.05,
+                      bottom_tol=0.05, reshape_meta=reshape_meta)
+
+        assert self.ds.find_sensors_by_tolerance_station_selection(
+            self.sensor_ids, **kwargs) is None
+
+        primary, meta = self.ds.find_sensors_by_tolerance_station_selection(
+            self.sensor_ids, keep_failed=True, **kwargs)
+
+        assert primary == 0
+        assert meta["other_ids"] == []
+        assert meta["instrument"] == "Tolerance selection failed"
+        assert meta["selection_failed"] is True
+        assert meta["selection_reason"] == "no_overlap"
+
+    def test_keep_failed_no_effect_on_kept_station(self):
+        """
+        A station that passes the selection is returned unchanged with
+        keep_failed and is not flagged.
+        """
+        kwargs = dict(depth_top=0.0, depth_bottom=0.05, top_tol=0.05,
+                      bottom_tol=0.05, reshape_meta=reshape_meta)
+        primary, meta = self.ds.find_sensors_by_tolerance_station_selection(
+            self.sensor_ids, **kwargs)
+        primary_kf, meta_kf = \
+            self.ds.find_sensors_by_tolerance_station_selection(
+                self.sensor_ids, keep_failed=True, **kwargs)
+
+        assert primary_kf == primary
+        assert meta_kf["other_ids"] == meta["other_ids"] == [1, 2]
+        assert meta_kf["instrument"] == "3 Averaged Sensors"
+        assert "selection_failed" not in meta_kf
+
     def test_single_sensor_metadata_untouched(self):
         """
         A station with a single matching sensor is kept as is, no merging
